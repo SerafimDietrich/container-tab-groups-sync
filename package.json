@@ -1,0 +1,20 @@
+{
+  "type": "module",
+  "devDependencies": {
+    "@eslint/js": "^9.32.0",
+    "@types/firefox-webext-browser": "^120.0.4",
+    "@types/webextension-polyfill": "^0.12.3",
+    "@typescript-eslint/eslint-plugin": "^8.38.0",
+    "@typescript-eslint/parser": "^8.38.0",
+    "cpx": "^1.5.0",
+    "eslint": "^9.32.0",
+    "typescript": "^5.8.3"
+  },
+  "scripts": {
+    "build": "npx tsc && cpx \"src/**/!(*.ts)\" dist",
+    "build-artifact": "web-ext build",
+    "dev": "npm run build && web-ext run",
+    "lint": "npx eslint src --fix",
+    "serve": "web-ext run"
+  }
+}
