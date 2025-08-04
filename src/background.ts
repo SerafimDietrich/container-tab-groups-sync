@@ -102,12 +102,12 @@ function scheduleReconcileTab(tabId: number): void {
 
   if (reconcileTimeout === 0) {
     reconcileTimeout = setTimeout(async () => {
-      const ids: number[] = Array.from(RECONCILE_QUEUE);
+      const tabIds: number[] = Array.from(RECONCILE_QUEUE);
 
       RECONCILE_QUEUE.clear();
       reconcileTimeout = 0;
 
-      await batchReconcileTabs(ids);
+      await batchReconcileTabs(tabIds);
     }, RECONCILE_TIMEOUT_DURATION);
   }
 }
@@ -117,7 +117,7 @@ async function batchReconcileTabs(tabIds: number[]): Promise<void> {
 
   const tabGroupIdToCookieStoreId: Map<number, string> = await loadTabGroupIdToCookieStoreId();
   const tabs: browser.tabs.Tab[] = await browser.tabs.query({});
-  const tabMap: Map<number, browser.tabs.Tab> = new Map(
+  const tabIdToTab: Map<number, browser.tabs.Tab> = new Map(
     tabs
       .filter(tab => tab.id !== undefined)
       .map(tab => [tab.id, tab] as [number, browser.tabs.Tab]),
@@ -125,7 +125,7 @@ async function batchReconcileTabs(tabIds: number[]): Promise<void> {
 
   await Promise.allSettled(
     tabIds.map(async tabId => {
-      const tab: browser.tabs.Tab | undefined = tabMap.get(tabId);
+      const tab: browser.tabs.Tab | undefined = tabIdToTab.get(tabId);
 
       if (tab) {
         const expectedCookieStoreId: string | undefined = tabGroupIdToCookieStoreId.get(
