@@ -2,6 +2,8 @@
 
 This Firefox extension automatically synchronizes tab groups with contextual identities (Firefox Multi-Account Containers). It is designed for Firefox 139+ and leverages the latest browser APIs for tab group and container management.
 
+https://github.com/user-attachments/assets/7bc323e7-e437-4dc8-9b18-8a8951ca8110
+
 ## Features
 
 - **Automatic Container Management:**
