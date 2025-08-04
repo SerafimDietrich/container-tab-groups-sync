@@ -36,6 +36,32 @@ This Firefox extension automatically synchronizes tab groups with contextual ide
 - **TypeScript API Gaps:**
   - Some Firefox APIs (e.g., `tabGroups`) may not be present in TypeScript definitions. The code uses `@ts-ignore` where necessary.
 
+## Installation
+
+To install this extension, follow these steps:
+
+1. **Download the Extension File:**
+
+   - Download the extension file from the [releases page](https://github.com/SerafimDietrich/container-tab-groups-sync/releases).
+
+2. **Open Firefox Add-ons Page:**
+
+   - Open Firefox and type `about:addons` in the address bar, then press Enter.
+
+3. **Install the Extension:**
+
+   - In the Add-ons Manager tab, click on the gear icon in the top-right corner and select "Install Add-on From File."
+   - Navigate to the location where you downloaded the file, select it, and click "Open."
+
+4. **Enable Unsigned Extensions (if necessary):**
+
+   - Since this extension is not signed by Mozilla, you may need to enable the installation of unsigned extensions. (May only be possible with Firefox Developer Edition or Firefox Beta) To do this:
+     - Type `about:config` in the address bar and press Enter.
+     - Search for `xpinstall.signatures.required`.
+     - Double-click on the preference to set it to `false`.
+
+You should now see the extension listed in your Add-ons Manager.
+
 ## Development Process
 
 ### Prerequisites
@@ -50,6 +76,7 @@ This Firefox extension automatically synchronizes tab groups with contextual ide
    ```bash
    npm install
    ```
+
 2. **Build the extension:**
 
    ```bash
@@ -57,6 +84,7 @@ This Firefox extension automatically synchronizes tab groups with contextual ide
    ```
 
    This compiles TypeScript and copies non-TypeScript files to `dist/`.
+
 3. **Run in Firefox:**
 
    ```bash
@@ -79,13 +107,13 @@ npm run build-artifact
 - All user-facing strings should use extension localization (i18n) where possible.
 - This project uses semantic versioning in the format: **x.y.z**
   - **Major version number (x):**
-  Increased for major changes.
-  Reset feature (y) and hotfix number (z) to zero when incremented.
+    Increased for major changes.
+    Reset feature (y) and hotfix number (z) to zero when incremented.
   - **Feature number number (y):**
-  Increased for new features (with or without bug fixes).
-  Reset hotfix number (z) to zero when incremented.
+    Increased for new features (with or without bug fixes).
+    Reset hotfix number (z) to zero when incremented.
   - **Hotfix number number (z):**
-  Increased for bug fixes only.
+    Increased for bug fixes only.
 
 ## Contributing
 
