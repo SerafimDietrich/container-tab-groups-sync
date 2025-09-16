@@ -403,12 +403,9 @@ browser.tabs.onCreated.addListener(tab => {
 });
 
 browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  // @ts-ignore: groupId is supported in Firefox 139+, but not in type definitions yet
-  if (changeInfo.groupId !== undefined || changeInfo.cookieStoreId !== undefined) {
-    log(LogLevel.INFO, "Tab updated:", tabId, changeInfo);
+  log(LogLevel.INFO, "Tab updated:", tabId, changeInfo);
 
-    scheduleReconcileTab(tabId);
-  }
+  scheduleReconcileTab(tabId);
 });
 // #endregion
 

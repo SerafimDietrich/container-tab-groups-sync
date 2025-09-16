@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Container Tab Groups Synchronisation",
   "description": "Automatically syncs tab groups with contextual identities (Firefox Multi Account Containers).",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "icons": {
     "64": "icon.png"
   },
