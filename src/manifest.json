@@ -2,14 +2,20 @@
   "manifest_version": 3,
   "name": "Container Tab Groups Synchronisation",
   "description": "Automatically syncs tab groups with contextual identities (Firefox Multi Account Containers).",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "icons": {
-    "64": "icon.png"
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "@container-tab-groups-sync",
-      "strict_min_version": "139.0"
+      "id": "container-tab-groups-sync@serafimdietrich",
+      "strict_min_version": "139.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
     }
   },
   "permissions": ["tabs", "tabGroups", "storage", "cookies", "contextualIdentities"],
