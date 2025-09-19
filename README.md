@@ -25,21 +25,24 @@ https://github.com/user-attachments/assets/7bc323e7-e437-4dc8-9b18-8a8951ca8110
 
 ## Installation
 
+### Through the Firefox Add-on store
+
+Visit [https://addons.mozilla.org/de/firefox/addon/container-tab-groups-sync/](https://addons.mozilla.org/de/firefox/addon/container-tab-groups-sync/) and click "Add to Firefox"!
+
+### Manually
+
 To install this extension, follow these steps:
 
 1. **Download the Extension File:**
 
    - Download the extension file from the [releases page](https://github.com/SerafimDietrich/container-tab-groups-sync/releases).
-
 2. **Open Firefox Add-ons Page:**
 
    - Open Firefox and type `about:addons` in the address bar, then press Enter.
-
 3. **Install the Extension:**
 
    - In the Add-ons Manager tab, click on the gear icon in the top-right corner and select "Install Add-on From File."
    - Navigate to the location where you downloaded the file, select it, and click "Open."
-
 4. **Enable Unsigned Extensions (if necessary):**
 
    - Since this extension is not signed by Mozilla, you may need to enable the installation of unsigned extensions. (May only be possible with Firefox Developer Edition or Firefox Beta) To do this:
@@ -73,19 +76,23 @@ These instructions will help you set up the project for development and testing.
 ### Build & Run
 
 1. **Build the extension:**
+
    ```bash
    npm run build
    ```
+
    This compiles TypeScript and copies non-TypeScript files to `dist/`.
 2. **Run in Firefox:**
+
    ```bash
    npm run serve
    ```
+
    This launches the extension in Firefox using `web-ext` from the `dist/` directory.
 
 ### Packaging
 
-To build a distributable artifact:
+To build a distributable artifact (build the extension beforehand):
 
 ```bash
 npm run build-artifact
@@ -94,13 +101,15 @@ npm run build-artifact
 ## Project Structure
 
 - `src/` – Source code for the extension
+  - `_locales/` – Localization files
+  - `icons/` – Icons
   - `background.ts` – Main background script
   - `manifest.json` – Extension manifest
-  - `_locales/` – Localization files
-- `web-ext-config.cjs` – Configuration for web-ext
-- `tsconfig.json` – TypeScript configuration
+- `.prettierrc` – Prettier configuration
 - `eslint.config.js` – ESLint configuration
 - `package.json` – Project metadata and scripts
+- `tsconfig.json` – TypeScript configuration
+- `web-ext-config.cjs` – Configuration for web-ext
 
 ## Code Style
 
