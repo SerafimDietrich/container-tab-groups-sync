@@ -1,5 +1,36 @@
 /// <reference types="webextension-polyfill" />
 
+// storage
+const LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID: string = "tabGroupIdToCookieStoreId";
+let tabGroupIdToCookieStoreId: Map<number, string> = new Map();
+
+// locks
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const GROUP_LOCKS: Map<number, Promise<any>> = new Map();
+const GROUP_TIMEOUT_MS: number = 60000;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const TAB_LOCKS: Map<number, Promise<any>> = new Map();
+const TAB_TIMEOUT_MS: number = 10000;
+
+// reconcile queue
+const RECONCILE_TIMEOUT_DURATION: number = 250;
+const RECONCILE_QUEUE: Set<number> = new Set();
+const RECONCILE_MAX_CONCURRENT: number = 20;
+let reconcileTimeout: number = 0;
+
+// Firefox defaults
+const FIREFOX_DEFAULT_GROUP_ID: number = -1;
+const FIREFOX_DEFAULT_COOKIE_STORE_ID: string = "firefox-default";
+
+// default contextual identities
+const DEFAULT_NAME: string = browser.i18n.getMessage("unnamedGroup") || "Unnamed Group";
+const DEFAULT_COLOR: string = "blue";
+const DEFAULT_ICON: string = "circle";
+
+self.addEventListener("unhandledrejection", event => {
+  log(LogLevel.ERROR, "Unhandled Promise Rejection:", event);
+});
+
 // #region logger
 enum LogLevel {
   INFO = "info",
@@ -29,12 +60,6 @@ function log(level: LogLevel, ...args: unknown[]): void {
 // #endregion
 
 // #region lock
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const GROUP_LOCKS: Map<number, Promise<any>> = new Map();
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const TAB_LOCKS: Map<number, Promise<any>> = new Map();
-const DEFAULT_TIMEOUT_MS: number = 60000;
-
 async function withGroupLock<T>(groupId: number, fn: () => Promise<T>): Promise<T> {
   while (GROUP_LOCKS.get(groupId)) {
     await GROUP_LOCKS.get(groupId);
@@ -44,7 +69,11 @@ async function withGroupLock<T>(groupId: number, fn: () => Promise<T>): Promise<
   GROUP_LOCKS.set(groupId, new Promise<void>(r => (resolve = r)));
 
   try {
-    return await promiseWithTimeout(fn(), `withGroupLock for groupId ${groupId} timed out`);
+    return await promiseWithTimeout(
+      fn(),
+      GROUP_TIMEOUT_MS,
+      `timed out (${GROUP_TIMEOUT_MS})`,
+    );
   } finally {
     GROUP_LOCKS.delete(groupId);
 
@@ -61,7 +90,11 @@ async function withTabLock<T>(tabId: number, fn: () => Promise<T>): Promise<T> {
   TAB_LOCKS.set(tabId, new Promise<void>(r => (resolve = r)));
 
   try {
-    return await promiseWithTimeout(fn(), `withTabLock for tabId ${tabId} timed out`);
+    return await promiseWithTimeout(
+      fn(),
+      TAB_TIMEOUT_MS,
+      `timed out (${TAB_TIMEOUT_MS})`,
+    );
   } finally {
     TAB_LOCKS.delete(tabId);
 
@@ -69,11 +102,15 @@ async function withTabLock<T>(tabId: number, fn: () => Promise<T>): Promise<T> {
   }
 }
 
-function promiseWithTimeout<T>(promise: Promise<T>, errorMsg: string): Promise<T> {
+function promiseWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  errorMsg: string,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timeout: number = setTimeout(() => {
       reject(new Error(errorMsg));
-    }, DEFAULT_TIMEOUT_MS);
+    }, timeoutMs);
 
     promise
       .then(result => {
@@ -88,12 +125,215 @@ function promiseWithTimeout<T>(promise: Promise<T>, errorMsg: string): Promise<T
 }
 // #endregion
 
-// #region reconcile tabs
-const FIREFOX_DEFAULT_GROUP_ID: number = -1;
-const RECONCILE_TIMEOUT_DURATION: number = 250;
-const RECONCILE_QUEUE: Set<number> = new Set();
+// #region storage
+async function loadTabGroupIdToCookieStoreId(): Promise<void> {
+  if (tabGroupIdToCookieStoreId.size === 0) {
+    try {
+      const raw: Record<string, unknown> =
+        (await browser.storage.local.get(LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID))[
+          LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID
+        ] || {};
 
-let reconcileTimeout: number = 0;
+      if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+        tabGroupIdToCookieStoreId = new Map(
+          Object.entries(raw).map(([k, v]: [string, unknown]) => [Number(k), v as string]),
+        ).set(FIREFOX_DEFAULT_GROUP_ID, FIREFOX_DEFAULT_COOKIE_STORE_ID);
+      } else {
+        log(
+          LogLevel.ERROR,
+          "Invalid data in local storage for",
+          LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID,
+          ", resetting to default",
+        );
+
+        tabGroupIdToCookieStoreId = new Map([
+          [FIREFOX_DEFAULT_GROUP_ID, FIREFOX_DEFAULT_COOKIE_STORE_ID],
+        ]);
+      }
+    } catch (error) {
+      log(
+        LogLevel.ERROR,
+        "Failed to load",
+        LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID,
+        "from local storage:",
+        error,
+      );
+
+      tabGroupIdToCookieStoreId = new Map([
+        [FIREFOX_DEFAULT_GROUP_ID, FIREFOX_DEFAULT_COOKIE_STORE_ID],
+      ]);
+    }
+  }
+}
+
+async function saveTabGroupIdToCookieStoreId(): Promise<void> {
+  try {
+    await browser.storage.local.set({
+      [LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID]: Object.fromEntries(
+        Array.from(tabGroupIdToCookieStoreId.entries()).map(([k, v]: [number, string]) => [
+          String(k),
+          v,
+        ]),
+      ),
+    });
+  } catch (error) {
+    log(
+      LogLevel.ERROR,
+      "Failed to save",
+      LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID,
+      "to local storage:",
+      error,
+    );
+  }
+}
+// #endregion
+
+// #region 1 event listeners
+browser.runtime.onInstalled.addListener(async details => {
+  try {
+    log(LogLevel.INFO, "Extension installed/updated", details);
+    await onStartup();
+  } catch (error) {
+    log(LogLevel.ERROR, "Error in onInstalled/onStartup", error);
+  }
+});
+
+browser.runtime.onStartup.addListener(async () => {
+  try {
+    log(LogLevel.INFO, "Extension started");
+    await onStartup();
+  } catch (error) {
+    log(LogLevel.ERROR, "Error in onStartup event", error);
+  }
+});
+
+// @ts-ignore: tabGroups is supported in Firefox 139+, but not in type definitions yet
+browser.tabGroups.onCreated.addListener(async tabGroup => {
+  try {
+    log(LogLevel.INFO, "Tab group created", tabGroup);
+    await createContextualIdentity(tabGroup);
+  } catch (error) {
+    log(LogLevel.ERROR, "Error in onCreated/createContextualIdentity", tabGroup, error);
+  }
+});
+
+// @ts-ignore: tabGroups is supported in Firefox 139+, but not in type definitions yet
+browser.tabGroups.onUpdated.addListener(async tabGroup => {
+  try {
+    log(LogLevel.INFO, "Tab group updated", tabGroup);
+    await loadTabGroupIdToCookieStoreId();
+    const cookieStoreId: string | undefined = tabGroupIdToCookieStoreId.get(tabGroup.id);
+
+    if (cookieStoreId) {
+      try {
+        await updateContextualIdentity(tabGroup, cookieStoreId);
+      } catch (error) {
+        log(
+          LogLevel.ERROR,
+          "Error in onUpdated/updateContextualIdentity",
+          tabGroup,
+          cookieStoreId,
+          error,
+        );
+      }
+    }
+  } catch (error) {
+    log(LogLevel.ERROR, "Error in onUpdated handler", tabGroup, error);
+  }
+});
+
+// @ts-ignore: tabGroups is supported in Firefox 139+, but not in type definitions yet
+browser.tabGroups.onRemoved.addListener(async tabGroup => {
+  try {
+    log(LogLevel.INFO, "Tab group removed", tabGroup);
+    await removeContextualIdentity(tabGroup);
+  } catch (error) {
+    log(LogLevel.ERROR, "Error in onRemoved/removeContextualIdentity", tabGroup, error);
+  }
+});
+
+browser.contextualIdentities.onRemoved.addListener(async onRemovedChangeInfo => {
+  try {
+    log(LogLevel.INFO, "Contextual identity removed", onRemovedChangeInfo);
+    await removeAssociationsForCookieStoreId(onRemovedChangeInfo.contextualIdentity.cookieStoreId);
+  } catch (error) {
+    log(
+      LogLevel.ERROR,
+      "Error in onRemoved/removeAssociationsForCookieStoreId",
+      onRemovedChangeInfo,
+      error,
+    );
+  }
+});
+
+browser.tabs.onAttached.addListener((tabId, changeInfo) => {
+  try {
+    log(LogLevel.INFO, "Tab attached", tabId, changeInfo);
+    scheduleReconcileTab(tabId);
+  } catch (error) {
+    log(LogLevel.ERROR, "Error in onAttached/scheduleReconcileTab", tabId, error);
+  }
+});
+
+browser.tabs.onCreated.addListener(tab => {
+  if (tab.id) {
+    try {
+      log(LogLevel.INFO, "Tab created", tab);
+      scheduleReconcileTab(tab.id);
+    } catch (error) {
+      log(LogLevel.ERROR, "Error in onCreated/scheduleReconcileTab", tab, error);
+    }
+  }
+});
+
+browser.tabs.onUpdated.addListener(
+  (tabId, changeInfo) => {
+    if (changeInfo.status !== "loading") {
+      try {
+        log(LogLevel.INFO, "Tab updated", tabId, changeInfo);
+        scheduleReconcileTab(tabId);
+      } catch (error) {
+        log(LogLevel.ERROR, "Error in onUpdated/scheduleReconcileTab", tabId, error);
+      }
+    }
+  },
+  // @ts-ignore: groupId is supported in Firefox 138+, but not in type definitions yet
+  { properties: ["groupId", "status"] },
+);
+// #endregion
+
+// #region 2.1 wrapper
+async function onStartup(): Promise<void> {
+  await loadTabGroupIdToCookieStoreId();
+  const tabGroupIdToCookieStoreIdWithOutDefault: Map<number, string> = new Map(
+    tabGroupIdToCookieStoreId,
+  );
+  tabGroupIdToCookieStoreIdWithOutDefault.delete(FIREFOX_DEFAULT_GROUP_ID);
+
+  // @ts-ignore: tabGroups is supported in Firefox 139+, but not in type definitions yet
+  const tabGroups: browser.tabGroups.TabGroup[] = await browser.tabGroups.query({});
+
+  // Remove contextual identities for tab groups that no longer exist
+  for (const groupId of tabGroupIdToCookieStoreIdWithOutDefault.keys()) {
+    if (!tabGroups.find(tabGroup => tabGroup.id === groupId)) {
+      await removeContextualIdentity(groupId);
+    }
+  }
+
+  // Create contextual identities for tab groups that don't have one yet
+  for (const tabGroup of tabGroups) {
+    if (!tabGroupIdToCookieStoreIdWithOutDefault.get(tabGroup.id)) {
+      await createContextualIdentity(tabGroup);
+    }
+  }
+
+  // Reconcile all tabs
+  (await browser.tabs.query({})).forEach(tab => {
+    if (typeof tab.id === "number") {
+      scheduleReconcileTab(tab.id);
+    }
+  });
+}
 
 function scheduleReconcileTab(tabId: number): void {
   log(LogLevel.INFO, "Scheduling reconcile for tab:", tabId);
@@ -102,185 +342,115 @@ function scheduleReconcileTab(tabId: number): void {
 
   if (reconcileTimeout === 0) {
     reconcileTimeout = setTimeout(async () => {
-      const tabIds: number[] = Array.from(RECONCILE_QUEUE);
+      const tabIdsToProcess: number[] = Array.from(RECONCILE_QUEUE).slice(
+        0,
+        RECONCILE_MAX_CONCURRENT,
+      );
+      const tabIdsToRequeue: number[] = Array.from(RECONCILE_QUEUE).slice(RECONCILE_MAX_CONCURRENT);
 
       RECONCILE_QUEUE.clear();
+      tabIdsToRequeue.forEach(id => RECONCILE_QUEUE.add(id));
       reconcileTimeout = 0;
 
-      await batchReconcileTabs(tabIds);
+      await batchReconcileTabs(tabIdsToProcess);
     }, RECONCILE_TIMEOUT_DURATION);
   }
+}
+// #endregion
+
+// #region 2.2 tasks (also group locks)
+async function createContextualIdentity(
+  // @ts-ignore: tabGroups is supported in Firefox 139+, but not in type definitions yet
+  tabGroup: browser.tabGroups.TabGroup,
+): Promise<void> {
+  await withGroupLock(tabGroup.id, async () => {
+    await loadTabGroupIdToCookieStoreId();
+
+    if (!tabGroupIdToCookieStoreId.get(tabGroup.id)) {
+      log(LogLevel.INFO, "Creating contextual identity for tab group:", tabGroup.id);
+
+      const contextualIdentity: browser.contextualIdentities.ContextualIdentity =
+        await browser.contextualIdentities.create({
+          name: DEFAULT_NAME,
+          color: DEFAULT_COLOR,
+          icon: DEFAULT_ICON,
+        });
+
+      await updateContextualIdentity(tabGroup, contextualIdentity.cookieStoreId);
+      tabGroupIdToCookieStoreId.set(tabGroup.id, contextualIdentity.cookieStoreId);
+      await saveTabGroupIdToCookieStoreId();
+    }
+  });
+}
+
+async function removeContextualIdentity(tabGroupId: number): Promise<void> {
+  await withGroupLock(tabGroupId, async () => {
+    await loadTabGroupIdToCookieStoreId();
+    const cookieStoreId: string | undefined = tabGroupIdToCookieStoreId.get(tabGroupId);
+
+    if (cookieStoreId) {
+      try {
+        log(LogLevel.INFO, "Removing contextual identity for tab group:", tabGroupId);
+
+        (
+          await browser.tabs.query({
+            cookieStoreId: cookieStoreId,
+          })
+        ).forEach(async tab => {
+          await moveTabToContextualIdentity(tab, FIREFOX_DEFAULT_COOKIE_STORE_ID);
+        });
+
+        await browser.contextualIdentities.remove(cookieStoreId);
+      } catch (error) {
+        log(LogLevel.ERROR, "Failed to remove contextual identity:", cookieStoreId, error);
+      }
+    }
+  });
+}
+
+async function removeAssociationsForCookieStoreId(cookieStoreIdOld: string): Promise<void> {
+  await loadTabGroupIdToCookieStoreId();
+
+  for (const [tabGroupId, cookieStoreId] of tabGroupIdToCookieStoreId.entries()) {
+    if (cookieStoreId === cookieStoreIdOld) {
+      tabGroupIdToCookieStoreId.delete(tabGroupId);
+    }
+  }
+
+  await saveTabGroupIdToCookieStoreId();
 }
 
 async function batchReconcileTabs(tabIds: number[]): Promise<void> {
   log(LogLevel.INFO, "Batch reconciling tabs:", tabIds);
 
-  const tabGroupIdToCookieStoreId: Map<number, string> = await loadTabGroupIdToCookieStoreId();
-  const tabs: browser.tabs.Tab[] = await browser.tabs.query({});
-  const tabIdToTab: Map<number, browser.tabs.Tab> = new Map(
-    tabs
-      .filter(tab => tab.id !== undefined)
-      .map(tab => [tab.id, tab] as [number, browser.tabs.Tab]),
-  );
+  await loadTabGroupIdToCookieStoreId();
 
+  // move tabs to their expected contextual identity
   await Promise.allSettled(
     tabIds.map(async tabId => {
-      const tab: browser.tabs.Tab | undefined = tabIdToTab.get(tabId);
+      try {
+        const tab: browser.tabs.Tab = await browser.tabs.get(tabId);
 
-      if (tab) {
         const expectedCookieStoreId: string | undefined = tabGroupIdToCookieStoreId.get(
-          // @ts-ignore: groupId is supported in Firefox 139+, but not in type definitions yet
+          // @ts-ignore: groupId is supported in Firefox 138+, but not in type definitions yet
           tab.groupId,
         );
 
-        if (expectedCookieStoreId && tab.cookieStoreId !== expectedCookieStoreId) {
-          // @ts-ignore: groupId is supported in Firefox 139+, but not in type definitions yet
+        if (expectedCookieStoreId) {
+          // @ts-ignore: groupId is supported in Firefox 138+, but not in type definitions yet
           await withGroupLock(tab.groupId, async () => {
             await moveTabToContextualIdentity(tab, expectedCookieStoreId);
           });
         }
-      } else {
-        log(LogLevel.INFO, "Tab with ID", tabId, "doesn't exist (anymore).");
+      } catch (error) {
+        log(LogLevel.ERROR, "Failed to reconcile tab:", tabId, error);
       }
     }),
   );
 }
 // #endregion
 
-// #region storage
-const LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID: string = "tabGroupIdToCookieStoreId";
-
-async function loadTabGroupIdToCookieStoreId(): Promise<Map<number, string>> {
-  try {
-    return new Map(
-      Object.entries(
-        (await browser.storage.local.get(LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID))[
-          LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID
-        ] || {},
-      ).map(([k, v]: [string, unknown]) => [Number(k), v as string]),
-    ).set(FIREFOX_DEFAULT_GROUP_ID, FIREFOX_DEFAULT_COOKIE_STORE_ID);
-  } catch (error) {
-    log(
-      LogLevel.ERROR,
-      "Failed to load ",
-      LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID,
-      ":",
-      error,
-    );
-
-    return new Map([[FIREFOX_DEFAULT_GROUP_ID, FIREFOX_DEFAULT_COOKIE_STORE_ID]]);
-  }
-}
-
-async function saveTabGroupIdToCookieStoreId(map: Map<number, string>): Promise<void> {
-  try {
-    await browser.storage.local.set({
-      [LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID]: Object.fromEntries(
-        Array.from(map.entries()).map(([k, v]: [number, string]) => [String(k), v]),
-      ),
-    });
-  } catch (error) {
-    log(
-      LogLevel.ERROR,
-      "Failed to save ",
-      LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID,
-      ":",
-      error,
-    );
-  }
-}
-
-async function getCookieStoreId(tabGroupId: number): Promise<string | undefined> {
-  return (await loadTabGroupIdToCookieStoreId()).get(tabGroupId);
-}
-
-async function setCookieStoreId(
-  tabGroupId: number,
-  cookieStoreId: string,
-): Promise<string | undefined> {
-  log(LogLevel.INFO, "Setting cookieStoreId for tabGroupId:", tabGroupId, cookieStoreId);
-
-  const tabGroupIdToCookieStoreId: Map<number, string> = await loadTabGroupIdToCookieStoreId();
-  const oldCookieStoreId: string | undefined = tabGroupIdToCookieStoreId.get(tabGroupId);
-
-  tabGroupIdToCookieStoreId.set(tabGroupId, cookieStoreId);
-
-  await saveTabGroupIdToCookieStoreId(tabGroupIdToCookieStoreId);
-  return oldCookieStoreId;
-}
-
-async function removeCookieStoreId(tabGroupId: number): Promise<string | undefined> {
-  log(LogLevel.INFO, "Removing cookieStoreId for tabGroupId:", tabGroupId);
-
-  const tabGroupIdToCookieStoreId: Map<number, string> = await loadTabGroupIdToCookieStoreId();
-  const oldCookieStoreId: string | undefined = tabGroupIdToCookieStoreId.get(tabGroupId);
-
-  tabGroupIdToCookieStoreId.delete(tabGroupId);
-
-  await saveTabGroupIdToCookieStoreId(tabGroupIdToCookieStoreId);
-  return oldCookieStoreId;
-}
-// #endregion
-
-// #region contextual identities
-const FIREFOX_DEFAULT_COOKIE_STORE_ID: string = "firefox-default";
-const DEFAULT_NAME: string = browser.i18n.getMessage("unnamedGroup") || "Unnamed Group";
-const DEFAULT_COLOR: string = "blue";
-const DEFAULT_ICON: string = "circle";
-
-async function createContextualIdentity(
-  // @ts-ignore: tabGroups is supported in Firefox 139+, but not in type definitions yet
-  tabGroup: browser.tabGroups.TabGroup,
-): Promise<void> {
-  await withGroupLock(tabGroup.id, async () => {
-    log(LogLevel.INFO, "Creating contextual identity for tab group:", tabGroup);
-
-    const contextualIdentity: browser.contextualIdentities.ContextualIdentity =
-      await browser.contextualIdentities.create({
-        name: DEFAULT_NAME,
-        color: DEFAULT_COLOR,
-        icon: DEFAULT_ICON,
-      });
-
-    try {
-      await browser.contextualIdentities.update(contextualIdentity.cookieStoreId, {
-        name: tabGroup.title,
-      });
-    } catch {}
-
-    try {
-      await browser.contextualIdentities.update(contextualIdentity.cookieStoreId, {
-        color: tabGroup.color,
-      });
-    } catch {}
-
-    await setCookieStoreId(tabGroup.id, contextualIdentity.cookieStoreId);
-  });
-}
-
-async function removeContextualIdentity(
-  // @ts-ignore: tabGroups is supported in Firefox 139+, but not in type definitions yet
-  tabGroup: browser.tabGroups.TabGroup,
-): Promise<void> {
-  await withGroupLock(tabGroup.id, async () => {
-    log(LogLevel.INFO, "Removing contextual identity for tab group:", tabGroup);
-
-    const cookieStoreId: string | undefined = await removeCookieStoreId(tabGroup.id);
-
-    if (cookieStoreId) {
-      (
-        await browser.tabs.query({
-          cookieStoreId: cookieStoreId,
-        })
-      ).forEach(async tab => {
-        await moveTabToContextualIdentity(tab, FIREFOX_DEFAULT_COOKIE_STORE_ID);
-      });
-
-      await browser.contextualIdentities.remove(cookieStoreId);
-    }
-  });
-}
-
+// #region 3 helper
 async function moveTabToContextualIdentity(
   tab: browser.tabs.Tab,
   cookieStoreId: string,
@@ -288,21 +458,29 @@ async function moveTabToContextualIdentity(
   if (tab.id) {
     await withTabLock(tab.id, async () => {
       if (tab.id && tab.cookieStoreId !== cookieStoreId) {
+        try {
+          await browser.tabs.get(tab.id);
+        } catch (error) {
+          log(LogLevel.WARN, "Tab no longer exists, cannot move:", tab.id, error);
+
+          return;
+        }
+
         log(LogLevel.INFO, "Moving tab to contextual identity:", tab.id, cookieStoreId);
 
         if (tab.discarded) {
-          log(LogLevel.INFO, "Tab is discarded, activating:", tab);
+          log(LogLevel.INFO, "Tab is discarded, activating:", tab.id);
 
           await browser.tabs.update(tab.id, { active: true });
         }
 
         if (tab.status !== "complete") {
           if (tab.status !== "loading") {
-            log(LogLevel.INFO, "Tab is not complete, reloading:", tab);
+            log(LogLevel.INFO, "Tab is not complete and isn't loading, reloading:", tab.id);
 
             await browser.tabs.reload(tab.id);
           } else {
-            log(LogLevel.INFO, "Tab is loading, waiting:", tab);
+            log(LogLevel.INFO, "Tab is loading, waiting:", tab.id);
 
             await waitForTabComplete(tab.id);
           }
@@ -312,7 +490,7 @@ async function moveTabToContextualIdentity(
           windowId: tab.windowId,
           index: tab.index,
           url: tab.url,
-          active: false,
+          active: tab.active,
           pinned: tab.pinned,
           openerTabId: tab.id,
           cookieStoreId: cookieStoreId,
@@ -320,123 +498,16 @@ async function moveTabToContextualIdentity(
           muted: tab.mutedInfo?.muted,
         });
 
-        await browser.tabs.remove(tab.id);
+        try {
+          await browser.tabs.remove(tab.id);
+        } catch (error) {
+          log(LogLevel.ERROR, "Failed to remove old tab after moving:", tab.id, error);
+        }
       }
     });
   } else {
-    log(LogLevel.WARN, "Tab has no ID, cannot move to contextual identity:", tab);
+    log(LogLevel.WARN, "Tab has no ID, cannot move to contextual identity:", tab.id);
   }
-}
-// #endregion
-
-// #region event listeners
-// @ts-ignore: tabGroups is supported in Firefox 139+, but not in type definitions yet
-browser.runtime.onInstalled.addListener(details => {
-  log(LogLevel.INFO, "Extension installed/updated:", details);
-
-  onStartup();
-});
-
-browser.runtime.onStartup.addListener(() => {
-  log(LogLevel.INFO, "Extension started");
-
-  onStartup();
-});
-
-// @ts-ignore: tabGroups is supported in Firefox 139+, but not in type definitions yet
-browser.tabGroups.onCreated.addListener(async tabGroup => {
-  log(LogLevel.INFO, "Tab group created:", tabGroup);
-
-  await createContextualIdentity(tabGroup);
-});
-
-// @ts-ignore: tabGroups is supported in Firefox 139+, but not in type definitions yet
-browser.tabGroups.onUpdated.addListener(async tabGroup => {
-  log(LogLevel.INFO, "Tab group updated:", tabGroup);
-
-  const cookieStoreId: string | undefined = await getCookieStoreId(tabGroup.id);
-
-  if (cookieStoreId) {
-    try {
-      await browser.contextualIdentities.update(cookieStoreId, {
-        name: tabGroup.title,
-      });
-    } catch {}
-
-    try {
-      await browser.contextualIdentities.update(cookieStoreId, {
-        color: tabGroup.color,
-      });
-    } catch {}
-  }
-});
-
-// @ts-ignore: tabGroups is supported in Firefox 139+, but not in type definitions yet
-browser.tabGroups.onRemoved.addListener(async tabGroup => {
-  log(LogLevel.INFO, "Tab group removed:", tabGroup);
-
-  await removeContextualIdentity(tabGroup);
-});
-
-browser.contextualIdentities.onRemoved.addListener(async onRemovedChangeInfo => {
-  log(LogLevel.INFO, "Contextual identity removed:", onRemovedChangeInfo);
-
-  const tabGroupIdToCookieStoreId: Map<number, string> = await loadTabGroupIdToCookieStoreId();
-
-  for (const [tabGroupId, cookieStoreId] of tabGroupIdToCookieStoreId.entries()) {
-    if (cookieStoreId === onRemovedChangeInfo.contextualIdentity.cookieStoreId) {
-      tabGroupIdToCookieStoreId.delete(tabGroupId);
-    }
-  }
-
-  await saveTabGroupIdToCookieStoreId(tabGroupIdToCookieStoreId);
-});
-
-browser.tabs.onAttached.addListener(scheduleReconcileTab);
-
-browser.tabs.onCreated.addListener(tab => {
-  if (tab.id) {
-    log(LogLevel.INFO, "Tab created:", tab);
-
-    scheduleReconcileTab(tab.id);
-  }
-});
-
-browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  log(LogLevel.INFO, "Tab updated:", tabId, changeInfo);
-
-  scheduleReconcileTab(tabId);
-});
-// #endregion
-
-// #region startup
-async function onStartup(): Promise<void> {
-  const tabGroupIdToCookieStoreId: Map<number, string> = await loadTabGroupIdToCookieStoreId();
-  tabGroupIdToCookieStoreId.delete(FIREFOX_DEFAULT_GROUP_ID);
-  // @ts-ignore: tabGroups is supported in Firefox 139+, but not in type definitions yet
-  const tabGroups: browser.tabGroups.TabGroup[] = await browser.tabGroups.query({});
-  const tabGroupIds: Set<number> = new Set(tabGroups.map(tabGroup => tabGroup.id));
-
-  for (const groupId of tabGroupIdToCookieStoreId.keys()) {
-    if (!tabGroupIds.has(groupId)) {
-      // @ts-ignore: tabGroups is supported in Firefox 139+, but not in type definitions yet
-      await removeContextualIdentity(await browser.tabGroups.get(groupId));
-    }
-  }
-
-  for (const tabGroup of tabGroups) {
-    const cookieStoreId: string | undefined = tabGroupIdToCookieStoreId.get(tabGroup.id);
-
-    if (!cookieStoreId) {
-      await createContextualIdentity(tabGroup);
-    }
-  }
-
-  batchReconcileTabs(
-    (await browser.tabs.query({}))
-      .map(tab => tab.id)
-      .filter((id): id is number => id !== undefined),
-  );
 }
 // #endregion
 
@@ -450,18 +521,18 @@ async function waitForTabComplete(tabId: number): Promise<void> {
     ): Promise<void> {
       if (updatedTabId === tabId) {
         if (tab.discarded) {
-          log(LogLevel.INFO, "Tab is discarded, activating:", tab);
+          log(LogLevel.INFO, "Tab is discarded, activating:", tab.id);
 
           await browser.tabs.update(tabId, { active: true });
         }
 
         if (tab.status === "complete") {
-          log(LogLevel.INFO, "Tab is complete, resolving:", tab);
+          log(LogLevel.INFO, "Tab is complete, resolving:", tab.id);
 
           browser.tabs.onUpdated.removeListener(listener);
           resolve();
         } else if (tab.status !== "loading") {
-          log(LogLevel.INFO, "Tab is not loading, reloading:", tab);
+          log(LogLevel.INFO, "Tab is not complete and isn't loading, reloading:", tab.id);
 
           await browser.tabs.reload(tabId);
           resolve();
@@ -469,5 +540,23 @@ async function waitForTabComplete(tabId: number): Promise<void> {
       }
     }),
   );
+}
+
+async function updateContextualIdentity(
+  // @ts-ignore: tabGroups is supported in Firefox 139+, but not in type definitions yet
+  tabGroup: browser.tabGroups.TabGroup,
+  cookieStoreId: string,
+): Promise<void> {
+  try {
+    await browser.contextualIdentities.update(cookieStoreId, {
+      name: tabGroup.title,
+    });
+  } catch {}
+
+  try {
+    await browser.contextualIdentities.update(cookieStoreId, {
+      color: tabGroup.color,
+    });
+  } catch {}
 }
 // #endregion
