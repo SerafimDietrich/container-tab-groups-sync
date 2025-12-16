@@ -27,7 +27,7 @@ export default [
       "no-empty": "off",
       semi: ["error", "always"],
       quotes: ["error", "double"],
-      indent: ["error", 2, { "SwitchCase": 1 }],
+      indent: ["error", 2, { SwitchCase: 1 }],
       "arrow-parens": ["error", "as-needed"],
       "comma-dangle": ["error", "always-multiline"],
       "object-curly-spacing": ["error", "always"],
@@ -37,7 +37,6 @@ export default [
       "space-infix-ops": "error",
       "no-multiple-empty-lines": ["error", { max: 1 }],
       "eol-last": ["error", "always"],
-      // TypeScript-specific rules
       "@typescript-eslint/no-unused-vars": ["warn"],
       "@typescript-eslint/explicit-function-return-type": ["warn"],
       "@typescript-eslint/no-explicit-any": ["warn"],
@@ -55,9 +54,16 @@ export default [
       ],
       "padding-line-between-statements": [
         "error",
-        // Blank line before and after block-like statements
-        { "blankLine": "always", "prev": "*", "next": ["if", "for", "while", "function", "class", "switch", "try"] },
-        { "blankLine": "always", "prev": ["if", "for", "while", "function", "class", "switch", "try"], "next": "*" },
+        {
+          blankLine: "always",
+          prev: "*",
+          next: ["if", "for", "while", "function", "class", "switch", "try"],
+        },
+        {
+          blankLine: "always",
+          prev: ["if", "for", "while", "function", "class", "switch", "try"],
+          next: "*",
+        },
       ],
     },
   },
@@ -79,7 +85,7 @@ export default [
       "no-empty": "off",
       semi: ["error", "always"],
       quotes: ["error", "double"],
-      indent: ["error", 2, { "SwitchCase": 1 }],
+      indent: ["error", 2, { SwitchCase: 1 }],
       "arrow-parens": ["error", "as-needed"],
       "comma-dangle": ["error", "always-multiline"],
       "object-curly-spacing": ["error", "always"],
@@ -91,8 +97,16 @@ export default [
       "eol-last": ["error", "always"],
       "padding-line-between-statements": [
         "error",
-        { "blankLine": "always", "prev": "*", "next": ["if", "for", "while", "function", "class", "switch", "try"] },
-        { "blankLine": "always", "prev": ["if", "for", "while", "function", "class", "switch", "try"], "next": "*" },
+        {
+          blankLine: "always",
+          prev: "*",
+          next: ["if", "for", "while", "function", "class", "switch", "try"],
+        },
+        {
+          blankLine: "always",
+          prev: ["if", "for", "while", "function", "class", "switch", "try"],
+          next: "*",
+        },
       ],
     },
   },

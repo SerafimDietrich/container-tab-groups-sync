@@ -2,13 +2,13 @@
   "type": "module",
   "devDependencies": {
     "@eslint/js": "^9.32.0",
-    "@types/firefox-webext-browser": "^120.0.4",
-    "@types/webextension-polyfill": "^0.12.3",
-    "@typescript-eslint/eslint-plugin": "^8.38.0",
-    "@typescript-eslint/parser": "^8.38.0",
+    "@types/firefox-webext-browser": "^143.0.0",
+    "@types/webextension-polyfill": "^0.12.4",
+    "@typescript-eslint/eslint-plugin": "^8.50.0",
+    "@typescript-eslint/parser": "^8.50.0",
     "cpx": "^1.5.0",
-    "eslint": "^9.32.0",
-    "typescript": "^5.8.3"
+    "eslint": "^9.39.2",
+    "typescript": "^5.9.3"
   },
   "scripts": {
     "build": "npx tsc && cpx \"src/**/!(*.ts)\" dist",
