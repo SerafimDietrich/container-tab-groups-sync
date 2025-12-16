@@ -36,13 +36,16 @@ To install this extension, follow these steps:
 1. **Download the Extension File:**
 
    - Download the extension file from the [releases page](https://github.com/SerafimDietrich/container-tab-groups-sync/releases).
+
 2. **Open Firefox Add-ons Page:**
 
    - Open Firefox and type `about:addons` in the address bar, then press Enter.
+
 3. **Install the Extension:**
 
    - In the Add-ons Manager tab, click on the gear icon in the top-right corner and select "Install Add-on From File."
    - Navigate to the location where you downloaded the file, select it, and click "Open."
+
 4. **Enable Unsigned Extensions (if necessary):**
 
    - Since this extension is not signed by Mozilla, you may need to enable the installation of unsigned extensions. (May only be possible with Firefox Developer Edition or Firefox Beta) To do this:
@@ -64,11 +67,14 @@ These instructions will help you set up the project for development and testing.
 ### Setup
 
 1. **Clone the repository:**
+
    ```bash
    git clone https://github.com/SerafimDietrich/container-tab-groups-sync.git
    cd container-tab-groups-sync
    ```
+
 2. **Install dependencies:**
+
    ```bash
    npm install
    ```
@@ -82,6 +88,7 @@ These instructions will help you set up the project for development and testing.
    ```
 
    This compiles TypeScript and copies non-TypeScript files to `dist/`.
+
 2. **Run in Firefox:**
 
    ```bash
