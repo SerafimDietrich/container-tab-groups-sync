@@ -4,6 +4,10 @@
 const LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID: string = "tabGroupIdToCookieStoreId";
 let tabGroupIdToCookieStoreId: Map<number, string> = new Map();
 
+// contextual identities managed by this extension
+const LOCAL_STORAGE_CONTEXTUAL_IDENTITIES: string = "contextualIdentities";
+let contextualIdentities: Set<string> = new Set();
+
 // locks
 type Lock_ = { promise: Promise<void>; resolve: () => void };
 const GROUP_LOCKS: Map<number, Lock_> = new Map();
@@ -217,10 +221,6 @@ async function loadTabGroupIdToCookieStoreId(): Promise<void> {
 }
 
 async function saveTabGroupIdToCookieStoreId(): Promise<void> {
-  if (tabGroupIdToCookieStoreId.size === 0) {
-    return;
-  }
-
   try {
     await browser.storage.local.set({
       [LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID]: Object.fromEntries(
@@ -229,6 +229,44 @@ async function saveTabGroupIdToCookieStoreId(): Promise<void> {
     });
   } catch (error) {
     log(LogLevel.ERROR, "Failed to save", LOCAL_STORAGE_TAB_GROUP_ID_TO_COOKIE_STORE_ID, "to local storage:", error);
+  }
+}
+
+async function loadContextualIdentities(): Promise<void> {
+  if (contextualIdentities.size !== 0) {
+    return;
+  }
+
+  try {
+    const raw: unknown =
+      (await browser.storage.local.get(LOCAL_STORAGE_CONTEXTUAL_IDENTITIES))[LOCAL_STORAGE_CONTEXTUAL_IDENTITIES] || [];
+
+    if (Array.isArray(raw)) {
+      contextualIdentities = new Set(raw as string[]);
+    } else {
+      log(
+        LogLevel.ERROR,
+        "Invalid data in local storage for",
+        LOCAL_STORAGE_CONTEXTUAL_IDENTITIES,
+        ", resetting to default",
+      );
+
+      contextualIdentities = new Set();
+    }
+  } catch (error) {
+    log(LogLevel.ERROR, "Failed to load", LOCAL_STORAGE_CONTEXTUAL_IDENTITIES, "from local storage:", error);
+
+    contextualIdentities = new Set();
+  }
+}
+
+async function saveContextualIdentities(): Promise<void> {
+  try {
+    await browser.storage.local.set({
+      [LOCAL_STORAGE_CONTEXTUAL_IDENTITIES]: Array.from(contextualIdentities),
+    });
+  } catch (error) {
+    log(LogLevel.ERROR, "Failed to save", LOCAL_STORAGE_CONTEXTUAL_IDENTITIES, "to local storage:", error);
   }
 }
 // #endregion
@@ -292,6 +330,9 @@ browser.contextualIdentities.onRemoved.addListener(async onRemovedChangeInfo => 
     log(LogLevel.INFO, "Contextual identity removed", onRemovedChangeInfo);
 
     await removeAssociationsForCookieStoreId(onRemovedChangeInfo.contextualIdentity.cookieStoreId);
+    await loadContextualIdentities();
+    contextualIdentities.delete(onRemovedChangeInfo.contextualIdentity.cookieStoreId);
+    await saveContextualIdentities();
   } catch (error) {
     log(LogLevel.ERROR, "Error in onRemoved/removeAssociationsForCookieStoreId", error);
   }
@@ -360,6 +401,23 @@ async function onStartup(): Promise<void> {
     }
   }
 
+  await loadContextualIdentities();
+  await Promise.allSettled(
+    Array.from(contextualIdentities).map(async cookieStoreIdOld => {
+      try {
+        if ((await browser.tabs.query({ cookieStoreId: cookieStoreIdOld })).length === 0) {
+          await removeContextualIdentity(cookieStoreIdOld);
+          await removeAssociationsForCookieStoreId(cookieStoreIdOld);
+        }
+      } catch (error) {
+        log(LogLevel.ERROR, "Error in contextualIdentities cleanup", error);
+
+        contextualIdentities.delete(cookieStoreIdOld);
+      }
+    }),
+  );
+  await saveContextualIdentities();
+
   tabs.forEach(tab => {
     if (typeof tab.id === "number" && !tab.discarded && tab.status === "complete") {
       scheduleReconcileTab(tab.id);
@@ -412,6 +470,9 @@ async function createContextualIdentityForTabGroup(
     await updateContextualIdentity(contextualIdentity.cookieStoreId, tabGroupTitle, tabGroupColor);
     tabGroupIdToCookieStoreId.set(tabGroupId, contextualIdentity.cookieStoreId);
     await saveTabGroupIdToCookieStoreId();
+    await loadContextualIdentities();
+    contextualIdentities.add(contextualIdentity.cookieStoreId);
+    await saveContextualIdentities();
   });
 }
 
@@ -424,14 +485,7 @@ async function removeContextualIdentityForTabGroup(tabGroupId: number): Promise<
       return;
     }
 
-    log(LogLevel.INFO, "Removing contextual identity for tab group:", tabGroupId);
-
-    try {
-      await browser.contextualIdentities.remove(cookieStoreId);
-    } catch (error) {
-      log(LogLevel.ERROR, "Failed to remove contextual identity:", cookieStoreId, error);
-    }
-
+    await removeContextualIdentity(cookieStoreId);
     tabGroupIdToCookieStoreId.delete(tabGroupId);
     await saveTabGroupIdToCookieStoreId();
   });
@@ -445,6 +499,10 @@ async function removeContextualIdentity(cookieStoreId: string): Promise<void> {
   } catch (error) {
     log(LogLevel.ERROR, "Failed to remove contextual identity:", cookieStoreId, error);
   }
+
+  await loadContextualIdentities();
+  contextualIdentities.delete(cookieStoreId);
+  await saveContextualIdentities();
 }
 
 async function removeAssociationsForCookieStoreId(cookieStoreIdOld: string): Promise<void> {
@@ -490,11 +548,7 @@ async function batchReconcileTabs(tabIdsToProcess: number[], cleanupContextualId
           const previousCookieStoreId: string | undefined = tab.cookieStoreId;
 
           if (await moveTabToContextualIdentity(tab, expectedCookieStoreId)) {
-            if (
-              cleanupContextualIdentities &&
-              previousCookieStoreId &&
-              previousCookieStoreId !== FIREFOX_DEFAULT_COOKIE_STORE_ID
-            ) {
+            if (cleanupContextualIdentities && previousCookieStoreId) {
               abandonedContextualIdentities.add(previousCookieStoreId);
             }
           } else {
@@ -508,14 +562,27 @@ async function batchReconcileTabs(tabIdsToProcess: number[], cleanupContextualId
   );
 
   if (cleanupContextualIdentities) {
+    await loadContextualIdentities();
     await Promise.allSettled(
-      Array.from(abandonedContextualIdentities).map(async cookieStoreIdOld => {
-        if ((await browser.tabs.query({ cookieStoreId: cookieStoreIdOld })).length === 0) {
-          await removeContextualIdentity(cookieStoreIdOld);
-          await removeAssociationsForCookieStoreId(cookieStoreIdOld);
-        }
-      }),
+      Array.from(abandonedContextualIdentities)
+        .filter(cookieStoreIdOld => contextualIdentities.has(cookieStoreIdOld))
+        .map(async cookieStoreIdOld => {
+          await loadTabGroupIdToCookieStoreId();
+          let tabCount: number = -1;
+
+          try {
+            tabCount = (await browser.tabs.query({ cookieStoreId: cookieStoreIdOld })).length;
+          } catch (error) {
+            log(LogLevel.ERROR, "Error querying tabs for cookieStoreId:", cookieStoreIdOld, error);
+          }
+
+          if (tabCount === 0) {
+            await removeContextualIdentity(cookieStoreIdOld);
+            await removeAssociationsForCookieStoreId(cookieStoreIdOld);
+          }
+        }),
     );
+    await saveContextualIdentities();
   }
 
   return tabIdsNotProcessed;
